@@ -61,7 +61,7 @@ use libc::{c_int, c_short, c_void, c_uint, c_ulong, socket, SOCK_RAW, close, bin
 use itertools::Itertools;
 use nix::net::if_::if_nametoindex;
 pub use nl::CanInterface;
-use std::{error, fmt, io, slice, time};
+use std::{error, fmt, io, time};
 use std::io::{Error, ErrorKind};
 use std::mem::{size_of, uninitialized};
 use util::{set_socket_option, set_socket_option_mult};
@@ -718,17 +718,6 @@ pub struct BcmMsgHead {
     _can_id: u32,
     /// number of can frames appended to the message head
     _nframes: u32,
-    /// buffer of CAN frames
-     _frames: [CanFrame; 4],
-}
-
-impl BcmMsgHead {
-    #[inline]
-    pub fn frames(&self) -> &[CanFrame] {
-        return unsafe {
-            slice::from_raw_parts(self._frames.as_ptr(), self._nframes as usize)
-        };
-    }
 }
 
 /// A socket for a CAN device, specifically for broadcast manager operations.
@@ -798,7 +787,6 @@ impl CanBCMSocket {
     pub fn filter_id(&self, can_id: c_uint, ival1: time::Duration, ival2: time::Duration) -> io::Result<()> {
         let _ival1 = c_timeval_new(ival1);
         let _ival2 = c_timeval_new(ival2);;
-        let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 4];
 
         let msg = &BcmMsgHead {
             _opcode: RX_SETUP,
@@ -808,7 +796,6 @@ impl CanBCMSocket {
             _ival2: _ival2,
             _can_id: can_id,
             _nframes: 0,
-            _frames: frames
         };
 
         let write_rv = unsafe {
@@ -816,10 +803,9 @@ impl CanBCMSocket {
             write(self.fd, msg_ptr as *const c_void, size_of::<BcmMsgHead>())
         };
 
-        let expected_size = size_of::<BcmMsgHead>() - size_of::<[CanFrame;4]>();
+        let expected_size = size_of::<BcmMsgHead>();
         if write_rv as usize != expected_size {
-            let msg = format!("Wrote {} but expected {}", write_rv, expected_size);
-            return Err(Error::new(ErrorKind::WriteZero, msg));
+            return Err(Error::new(ErrorKind::WriteZero, "Failed to write BcmMsgHead"));
         }
 
         Ok(())
@@ -827,7 +813,6 @@ impl CanBCMSocket {
 
     /// Remove a content filter subscription.
     pub fn filter_delete(&self, can_id: c_uint) -> io::Result<()> {
-        let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 4];
 
         let msg = &BcmMsgHead {
             _opcode: RX_DELETE,
@@ -837,7 +822,6 @@ impl CanBCMSocket {
             _ival2: c_timeval_new(time::Duration::new(0, 0)),
             _can_id: can_id,
             _nframes: 0,
-            _frames: frames
         };
 
         let write_rv = unsafe {
@@ -845,20 +829,17 @@ impl CanBCMSocket {
             write(self.fd, msg_ptr as *const c_void, size_of::<BcmMsgHead>())
         };
 
-        let expected_size = size_of::<BcmMsgHead>() - size_of::<[CanFrame;4]>();
-        if write_rv as usize != expected_size {
-            let msg = format!("Wrote {} but expected {}", write_rv, expected_size);
-            return Err(Error::new(ErrorKind::WriteZero, msg));
+        if write_rv as usize != size_of::<BcmMsgHead>() {
+            return Err(Error::new(ErrorKind::WriteZero, "Failed to write BcmMsgHead"));
         }
 
         Ok(())
     }
 
-    /// Blocking read a single can frame.
-    pub fn read_frames(&self) -> io::Result<BcmMsgHead> {
+    /// Blocking read a can frames from broadcast manager.
+    pub fn read_frames(&self) -> io::Result<Vec<CanFrame>> {
         let ival1 = c_timeval_new(time::Duration::from_millis(0));
         let ival2 = c_timeval_new(time::Duration::from_millis(0));
-        let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 4];
 
         let mut msg = BcmMsgHead {
             _opcode: 0,
@@ -868,7 +849,6 @@ impl CanBCMSocket {
             _ival2: ival2,
             _can_id: 0,
             _nframes: 0,
-            _frames: frames
         };
 
         let read_rv = unsafe {
@@ -876,14 +856,22 @@ impl CanBCMSocket {
             read(self.fd, msg_ptr as *mut c_void, size_of::<BcmMsgHead>())
         };
 
-        let expected_size = size_of::<BcmMsgHead>() - size_of::<[CanFrame;4]>();
-
-        if (read_rv as usize) < expected_size {
-            let msg = format!("Read {} but expected at least {}", read_rv, expected_size);
-            return Err(Error::new(ErrorKind::Other, msg));
+        if read_rv as usize != size_of::<BcmMsgHead>() {
+            return Err(Error::new(ErrorKind::Other, "Failed to read BcmMsgHead"));
         }
 
-        Ok(msg)
+        let mut frames = Vec::with_capacity(msg._nframes as usize);
+
+        for _ in 0..msg._nframes {
+            let mut frame = CanFrame::new(0x0, &[], false, false).unwrap();
+            unsafe {
+              let frame_ptr = &mut frame as *mut CanFrame;
+              read(self.fd, frame_ptr as *mut c_void, size_of::<CanFrame>());
+              frames.push(frame);
+            }
+       };
+
+        Ok(frames)
     }
 }
 
