@@ -864,11 +864,15 @@ impl CanBCMSocket {
 
         for _ in 0..msg._nframes {
             let mut frame = CanFrame::new(0x0, &[], false, false).unwrap();
-            unsafe {
-              let frame_ptr = &mut frame as *mut CanFrame;
-              read(self.fd, frame_ptr as *mut c_void, size_of::<CanFrame>());
-              frames.push(frame);
+            let read_frame = unsafe {
+                let frame_ptr = &mut frame as *mut CanFrame;
+                read(self.fd, frame_ptr as *mut c_void, size_of::<CanFrame>())
+            };
+
+            if read_frame as usize != size_of::<CanFrame>() {
+                return Err(Error::new(ErrorKind::Other, "Failed to read frame"));
             }
+            frames.push(frame);
        };
 
         Ok(frames)
