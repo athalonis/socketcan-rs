@@ -754,7 +754,7 @@ pub struct BcmMsgHeadFrameLess {
 #[repr(C)]
 pub struct TxMsg {
     _msg_head: BcmMsgHeadFrameLess,
-    _frames: [CanFrame; 4 as usize],
+    _frames: [CanFrame; 1 as usize],
 }
 
 impl BcmMsgHead {
@@ -833,19 +833,18 @@ impl CanBCMSocket {
     pub fn filter_id(&self, can_id: c_uint, ival1: time::Duration, ival2: time::Duration) -> io::Result<()> {
         let _ival1 = c_timeval_new(ival1);
         let _ival2 = c_timeval_new(ival2);;
-        let empty_frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 0 as usize];
-        let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 4 as usize];
-
+        let data = [0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF];
+        let frames = [CanFrame::new(can_id, &data, false, false).unwrap(); 1 as usize];
 
         let msg = BcmMsgHeadFrameLess {
             _opcode: RX_SETUP,
-            _flags: SETTIMER | RX_FILTER_ID,
+            _flags: SETTIMER,
             _count: 0,
             _pad: 0,
             _ival1: _ival1,
             _ival2: _ival2,
-            _can_id: can_id,
-            _nframes: 0,
+            _can_id: can_id | EFF_FLAG,
+            _nframes: 1,
         };
 
         let tx_msg = &TxMsg {
