@@ -40,6 +40,7 @@
 #![cfg_attr(feature = "cargo-clippy", allow(doc_markdown))]
 
 extern crate byte_conv;
+extern crate futures;
 extern crate hex;
 extern crate itertools;
 extern crate libc;
@@ -56,7 +57,7 @@ mod util;
 #[cfg(test)]
 mod tests;
 
-use libc::{c_int, c_short, c_void, c_uint, c_ulong, socket, SOCK_RAW, close, bind, connect, sockaddr, read,
+use libc::{c_int, c_short, c_void, c_uint, c_ulong, EAGAIN, F_SETFL, O_NONBLOCK, fcntl, socket, SOCK_RAW, close, bind, connect, sockaddr, read,
            write, SOL_SOCKET, SO_RCVTIMEO, timespec, timeval, EINPROGRESS, SO_SNDTIMEO};
 use itertools::Itertools;
 use nix::net::if_::if_nametoindex;
@@ -758,6 +759,11 @@ pub struct TxMsg {
 }
 
 impl BcmMsgHead {
+
+    pub fn can_id(&self) -> u32 {
+        self._can_id
+    }
+
     #[inline]
     pub fn frames(&self) -> &[CanFrame] {
         return unsafe {
@@ -795,6 +801,14 @@ impl CanBCMSocket {
         }
 
         if sock_fd == -1 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        let fcntl_resp = unsafe {
+            fcntl(sock_fd, F_SETFL, O_NONBLOCK)
+        };
+
+        if fcntl_resp == -1 {
             return Err(CanSocketOpenError::from(io::Error::last_os_error()));
         }
 
@@ -927,10 +941,75 @@ impl CanBCMSocket {
 
         Ok(msg)
     }
+
+        /// Blocking read a single can frame.
+    pub fn read_msg(&self) -> futures::Poll<Option<BcmMsgHead>, io::Error> {
+        let ival1 = c_timeval_new(time::Duration::from_millis(0));
+        let ival2 = c_timeval_new(time::Duration::from_millis(0));
+        let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); MAX_NFRAMES as usize];
+
+        let mut msg = BcmMsgHead {
+            _opcode: 0,
+            _flags: 0,
+            _count: 0,
+            _ival1: ival1,
+            _ival2: ival2,
+            _can_id: 0,
+            _nframes: 0,
+            _pad: 0,
+            _frames: frames
+        };
+
+        println!("Reading");
+        let count = unsafe {
+            let msg_ptr = &mut msg as *mut BcmMsgHead;
+            read(self.fd, msg_ptr as *mut c_void, size_of::<BcmMsgHead>())
+        };
+
+        println!("Done reading");
+
+        if count < 0 && io::Error::last_os_error().raw_os_error().map(|e| e == EAGAIN).unwrap_or(false) {
+            println!("Not ready");
+            return Ok(futures::Async::NotReady);
+        }
+
+        let expected_size = size_of::<BcmMsgHead>() - size_of::<[CanFrame; MAX_NFRAMES as usize]>();
+
+        if (count as usize) < expected_size {
+            let msg = format!("Read {} but expected at least {}", count, expected_size);
+            return Err(Error::new(ErrorKind::Other, msg));
+        }
+
+        Ok(futures::Async::Ready(Some(msg)))
+    }
 }
 
 impl Drop for CanBCMSocket {
     fn drop(&mut self) {
         self.close().ok();  // ignore result
+    }
+}
+
+
+pub struct BcmSocketListener {
+    bcm_socket: CanBCMSocket,
+}
+
+impl BcmSocketListener {
+    pub fn from(bcm_socket: CanBCMSocket) -> BcmSocketListener {
+        BcmSocketListener {
+            bcm_socket: bcm_socket
+        }
+    }
+}
+
+impl futures::stream::Stream for BcmSocketListener {
+    type Item = BcmMsgHead;
+    type Error = io::Error;
+    fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
+        println!("Poll");
+        let p = self.bcm_socket.read_msg();
+        println!("Done polling");
+        p
     }
 }
