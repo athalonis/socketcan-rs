@@ -1,4 +1,4 @@
-use ::CanSocket;
+use CanSocket;
 
 #[test]
 fn test_nonexistant_device() {
@@ -14,14 +14,16 @@ mod vcan_tests {
 
     use futures::stream::Stream;
     use self::tokio_core::reactor::Core;
-    use ::{BcmSocketListener, CanFrame, CanInterface, CanSocket, CanBCMSocket, ERR_MASK_ALL, ERR_MASK_NONE};
+    use {BcmSocketListener, CanFrame, CanInterface, CanSocket, CanBCMSocket, ERR_MASK_ALL,
+         ERR_MASK_NONE};
     use std::time;
-    use ::ShouldRetry;
+    use ShouldRetry;
 
     #[test]
     fn vcan0_timeout() {
         let cs = CanSocket::open("vcan0").unwrap();
-        cs.set_read_timeout(time::Duration::from_millis(100)).unwrap();
+        cs.set_read_timeout(time::Duration::from_millis(100))
+            .unwrap();
         assert!(cs.read_frame().should_retry());
     }
 
@@ -86,15 +88,17 @@ mod vcan_tests {
     fn vcan0_bcm_non_blocking() {
         let mut core = Core::new().unwrap();
         let cbs = CanBCMSocket::open("vcan0").unwrap();
+        let ival = time::Duration::from_millis(1);
+        cbs.filter_id(0x123, ival, ival).unwrap();
+
         let cl = BcmSocketListener::from(cbs);
-        let msg_stream = cl.and_then(|msg_head|{
+        let msg_stream = cl.and_then(|msg_head| {
             print!("MSG HEAD {:?}", msg_head.can_id());
-                Ok(msg_head)
-        })
-            .for_each(|msg_head| {
-            print!("MSG HEAD {:?}", msg_head.can_id());
-            Ok(())
-        });
+            Ok(msg_head)
+        }).for_each(|msg_head| {
+                print!("MSG HEAD {:?}", msg_head.can_id());
+                Ok(())
+            });
         core.run(msg_stream).unwrap();
         println!("Done Done");
     }
