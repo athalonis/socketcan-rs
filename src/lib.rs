@@ -964,14 +964,8 @@ impl CanBCMSocket {
         )?;
 
         let mut events = Events::with_capacity(1024);
-        let start = Instant::now();
-        let timeout = Duration::from_millis(50000);
         loop {
-            let elapsed = start.elapsed();
-            println!("Elapsed {:?}", elapsed);
-
-            let remaining = timeout - elapsed;
-            poll.poll(&mut events, Some(remaining))?;
+            poll.poll(&mut events, None)?;
 
             for event in &events {
                 if event.token() == Token(11111) {
