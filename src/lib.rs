@@ -47,6 +47,7 @@ extern crate libc;
 extern crate mio;
 extern crate netlink_rs;
 extern crate nix;
+extern crate tokio_core;
 extern crate try_from;
 
 mod err;
@@ -62,10 +63,11 @@ use libc::{c_int, c_short, c_void, c_uint, c_ulong, EAGAIN, F_SETFL, O_NONBLOCK,
            SOCK_RAW, close, bind, connect, sockaddr, read, write, SOL_SOCKET, SO_RCVTIMEO,
            timespec, timeval, EINPROGRESS, SO_SNDTIMEO};
 use itertools::Itertools;
-use mio::{Events, Ready, Poll, PollOpt, Token};
+use mio::{Evented, Events, Ready, Poll, PollOpt, Token};
 use mio::unix::EventedFd;
 use nix::net::if_::if_nametoindex;
 pub use nl::CanInterface;
+use tokio_core::reactor::{Handle, PollEvented};
 use std::{error, fmt, io, slice, time};
 use std::io::{Error, ErrorKind};
 use std::mem::{size_of, uninitialized};
@@ -777,9 +779,9 @@ impl BcmMsgHead {
 }
 
 /// A socket for a CAN device, specifically for broadcast manager operations.
-#[derive(Debug)]
+//#[derive(Debug)]
 pub struct CanBCMSocket {
-    fd: c_int,
+    pub fd: c_int,
 }
 
 impl CanBCMSocket {
@@ -787,15 +789,15 @@ impl CanBCMSocket {
     ///
     /// Usually the more common case, opens a socket can device by name, such
     /// as "vcan0" or "socan0".
-    pub fn open(ifname: &str) -> Result<CanBCMSocket, CanSocketOpenError> {
+    pub fn open(ifname: &str, handle: &Handle) -> Result<CanBCMSocket, CanSocketOpenError> {
         let if_index = if_nametoindex(ifname)?;
-        CanBCMSocket::open_if(if_index)
+        CanBCMSocket::open_if(if_index, handle)
     }
 
     /// Open CAN device by interface number.
     ///
     /// Opens a CAN device by kernel interface number.
-    pub fn open_if(if_index: c_uint) -> Result<CanBCMSocket, CanSocketOpenError> {
+    pub fn open_if(if_index: c_uint, handle: &Handle) -> Result<CanBCMSocket, CanSocketOpenError> {
 
         // open socket
         let sock_fd;
@@ -953,63 +955,68 @@ impl CanBCMSocket {
     }
 
     /// Blocking read a single can frame.
-    pub fn read_msg(&self) -> futures::Poll<Option<BcmMsgHead>, io::Error> {
+    pub fn read_msg(&self) -> io::Result<BcmMsgHead> {
 
-        let poll = Poll::new()?;
-        poll.register(
-            &EventedFd(&self.fd),
-            Token(11111),
-            Ready::readable(),
-            PollOpt::edge(),
-        )?;
+        let ival1 = c_timeval_new(time::Duration::from_millis(0));
+        let ival2 = c_timeval_new(time::Duration::from_millis(0));
+        let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); MAX_NFRAMES as usize];
+        let mut msg = BcmMsgHead {
+            _opcode: 0,
+            _flags: 0,
+            _count: 0,
+            _ival1: ival1,
+            _ival2: ival2,
+            _can_id: 0,
+            _nframes: 0,
+            _pad: 0,
+            _frames: frames,
+        };
 
-        let mut events = Events::with_capacity(1024);
-        loop {
-            poll.poll(&mut events, None)?;
+        let msg_ptr = &mut msg as *mut BcmMsgHead;
+        let count = unsafe {
+            read(
+                self.fd.clone(),
+                msg_ptr as *mut c_void,
+                size_of::<BcmMsgHead>(),
+            )
+        };
 
-            for event in &events {
-                if event.token() == Token(11111) {
-                    println!("Ready");
-                    let ival1 = c_timeval_new(time::Duration::from_millis(0));
-                    let ival2 = c_timeval_new(time::Duration::from_millis(0));
-                    let frames = [CanFrame::new(0x0, &[], false, false).unwrap();
-                        MAX_NFRAMES as usize];
-
-                    let mut msg = BcmMsgHead {
-                        _opcode: 0,
-                        _flags: 0,
-                        _count: 0,
-                        _ival1: ival1,
-                        _ival2: ival2,
-                        _can_id: 0,
-                        _nframes: 0,
-                        _pad: 0,
-                        _frames: frames,
-                    };
-
-                    println!("Reading");
-                    let count = unsafe {
-                        let msg_ptr = &mut msg as *mut BcmMsgHead;
-                        read(self.fd, msg_ptr as *mut c_void, size_of::<BcmMsgHead>())
-                    };
-
-                    println!("Done reading");
-
-                    let expected_size = size_of::<BcmMsgHead>() -
-                        size_of::<[CanFrame; MAX_NFRAMES as usize]>();
-
-                    if (count as usize) < expected_size {
-                        let msg = format!("Read {} but expected at least {}", count, expected_size);
-                        return Err(Error::new(ErrorKind::Other, msg));
-                    }
-
-                    return Ok(futures::Async::Ready(Some(msg)));
-                }
-            }
+        let last_error = io::Error::last_os_error();
+        if count < 0
+            //last_error.raw_os_error().map(|e| e == EAGAIN).unwrap_or(
+            //    false,
+            //)
+        {
+            Err(last_error)
+        } else {
+            Ok(msg)
         }
+    }
+}
 
-        println!("Not ready");
-        return Ok(futures::Async::NotReady);
+impl Evented for CanBCMSocket {
+    fn register(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.fd).register(poll, token, interest, opts)
+    }
+
+    fn reregister(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.fd).reregister(poll, token, interest, opts)
+    }
+
+    fn deregister(&self, poll: &Poll) -> io::Result<()> {
+        EventedFd(&self.fd).deregister(poll)
     }
 }
 
@@ -1021,12 +1028,18 @@ impl Drop for CanBCMSocket {
 
 
 pub struct BcmSocketListener {
-    bcm_socket: CanBCMSocket,
+    //bcm_socket: CanBCMSocket,
+    io: PollEvented<CanBCMSocket>,
 }
 
 impl BcmSocketListener {
-    pub fn from(bcm_socket: CanBCMSocket) -> BcmSocketListener {
-        BcmSocketListener { bcm_socket: bcm_socket }
+    pub fn from(bcm_socket: CanBCMSocket, handle: &Handle) -> io::Result<BcmSocketListener> {
+        //let evented_fd = EventedFd(&sock_fd);
+        let io = try!(PollEvented::new(bcm_socket, handle));
+        Ok(BcmSocketListener {
+            //bcm_socket: bcm_socket,
+            io: io,
+        })
     }
 }
 
@@ -1035,8 +1048,20 @@ impl futures::stream::Stream for BcmSocketListener {
     type Error = io::Error;
     fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
         println!("Poll");
-        let p = self.bcm_socket.read_msg();
-        println!("Done polling");
-        p
+        if let futures::Async::NotReady = self.io.poll_read() {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+
+        match self.io.get_ref().read_msg() {
+            Ok(n) => Ok(futures::Async::Ready(Some(n))),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    println!("WouldBlock");
+                    self.io.need_read();
+                }
+                println!("Read Error {}", e);
+                Err(e)
+            }
+        }
     }
 }
