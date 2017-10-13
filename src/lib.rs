@@ -982,15 +982,7 @@ impl CanBCMSocket {
         };
 
         let last_error = io::Error::last_os_error();
-        if count < 0
-            //last_error.raw_os_error().map(|e| e == EAGAIN).unwrap_or(
-            //    false,
-            //)
-        {
-            Err(last_error)
-        } else {
-            Ok(msg)
-        }
+        if count < 0 { Err(last_error) } else { Ok(msg) }
     }
 }
 
@@ -1049,7 +1041,7 @@ impl futures::stream::Stream for BcmSocketListener {
     fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
         println!("Poll");
         if let futures::Async::NotReady = self.io.poll_read() {
-            return Err(io::ErrorKind::WouldBlock.into());
+            return Ok(futures::Async::NotReady);
         }
 
         match self.io.get_ref().read_msg() {
@@ -1058,9 +1050,10 @@ impl futures::stream::Stream for BcmSocketListener {
                 if e.kind() == io::ErrorKind::WouldBlock {
                     println!("WouldBlock");
                     self.io.need_read();
+                    return Ok(futures::Async::NotReady);
                 }
                 println!("Read Error {}", e);
-                Err(e)
+                return Err(e);
             }
         }
     }
