@@ -789,15 +789,15 @@ impl CanBCMSocket {
     ///
     /// Usually the more common case, opens a socket can device by name, such
     /// as "vcan0" or "socan0".
-    pub fn open(ifname: &str, handle: &Handle) -> Result<CanBCMSocket, CanSocketOpenError> {
+    pub fn open(ifname: &str) -> Result<CanBCMSocket, CanSocketOpenError> {
         let if_index = if_nametoindex(ifname)?;
-        CanBCMSocket::open_if(if_index, handle)
+        CanBCMSocket::open_if(if_index)
     }
 
     /// Open CAN device by interface number.
     ///
     /// Opens a CAN device by kernel interface number.
-    pub fn open_if(if_index: c_uint, handle: &Handle) -> Result<CanBCMSocket, CanSocketOpenError> {
+    pub fn open_if(if_index: c_uint) -> Result<CanBCMSocket, CanSocketOpenError> {
 
         // open socket
         let sock_fd;
