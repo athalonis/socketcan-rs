@@ -859,7 +859,6 @@ impl CanBCMSocket {
     ) -> io::Result<()> {
         let _ival1 = c_timeval_new(ival1);
         let _ival2 = c_timeval_new(ival2);
-        let empty_frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 0 as usize];
         let frames = [CanFrame::new(0x0, &[], false, false).unwrap(); 4 as usize];
 
 
@@ -870,7 +869,7 @@ impl CanBCMSocket {
             _pad: 0,
             _ival1: _ival1,
             _ival2: _ival2,
-            _can_id: can_id,
+            _can_id: can_id | EFF_FLAG,
             _nframes: 0,
         };
 
@@ -1039,7 +1038,6 @@ impl futures::stream::Stream for BcmSocketListener {
     type Item = BcmMsgHead;
     type Error = io::Error;
     fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
-        println!("Poll");
         if let futures::Async::NotReady = self.io.poll_read() {
             return Ok(futures::Async::NotReady);
         }
@@ -1048,11 +1046,9 @@ impl futures::stream::Stream for BcmSocketListener {
             Ok(n) => Ok(futures::Async::Ready(Some(n))),
             Err(e) => {
                 if e.kind() == io::ErrorKind::WouldBlock {
-                    println!("WouldBlock");
                     self.io.need_read();
                     return Ok(futures::Async::NotReady);
                 }
-                println!("Read Error {}", e);
                 return Err(e);
             }
         }
