@@ -715,10 +715,31 @@ pub const TX_RESET_MULTI_ID: u32 = 0x0200;
 pub const RX_RTR_FRAME: u32 = 0x0400;
 pub const CAN_FD_FRAME: u32 = 0x0800;
 
+
+#[repr(C)]
+#[cfg(all(target_pointer_width = "64"))]
+pub struct BcmMsgHead {
+    _opcode: u32,
+    _flags: u32,
+    /// number of frames to send before changing interval
+    _count: u32,
+    /// interval for the first count frames
+    _ival1: timeval,
+    /// interval for the following frames
+    _ival2: timeval,
+    _can_id: u32,
+    /// number of can frames appended to the message head
+    _nframes: u32,
+    // TODO figure out how to allocate only nframes instead of MAX_NFRAMES
+    /// buffer of CAN frames
+    _frames: [CanFrame; MAX_NFRAMES as usize],
+}
+
 /// BcmMsgHead
 ///
 /// Head of messages to and from the broadcast manager
 #[repr(C)]
+#[cfg(all(target_pointer_width = "32"))]
 pub struct BcmMsgHead {
     _opcode: u32,
     _flags: u32,
@@ -920,6 +941,7 @@ impl CanBCMSocket {
             _ival2: c_timeval_new(time::Duration::new(0, 0)),
             _can_id: can_id,
             _nframes: 0,
+            #[cfg(all(target_pointer_width = "32"))]
             _pad: 0,
             _frames: frames,
         };
@@ -952,6 +974,7 @@ impl CanBCMSocket {
             _ival2: ival2,
             _can_id: 0,
             _nframes: 0,
+            #[cfg(all(target_pointer_width = "32"))]
             _pad: 0,
             _frames: frames,
         };
@@ -985,6 +1008,7 @@ impl CanBCMSocket {
             _ival2: ival2,
             _can_id: 0,
             _nframes: 0,
+            #[cfg(all(target_pointer_width = "32"))]
             _pad: 0,
             _frames: frames,
         };
