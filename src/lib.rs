@@ -715,31 +715,10 @@ pub const TX_RESET_MULTI_ID: u32 = 0x0200;
 pub const RX_RTR_FRAME: u32 = 0x0400;
 pub const CAN_FD_FRAME: u32 = 0x0800;
 
-
-#[repr(C)]
-#[cfg(all(target_pointer_width = "64"))]
-pub struct BcmMsgHead {
-    _opcode: u32,
-    _flags: u32,
-    /// number of frames to send before changing interval
-    _count: u32,
-    /// interval for the first count frames
-    _ival1: timeval,
-    /// interval for the following frames
-    _ival2: timeval,
-    _can_id: u32,
-    /// number of can frames appended to the message head
-    _nframes: u32,
-    // TODO figure out how to allocate only nframes instead of MAX_NFRAMES
-    /// buffer of CAN frames
-    _frames: [CanFrame; MAX_NFRAMES as usize],
-}
-
 /// BcmMsgHead
 ///
 /// Head of messages to and from the broadcast manager
 #[repr(C)]
-#[cfg(all(target_pointer_width = "32"))]
 pub struct BcmMsgHead {
     _opcode: u32,
     _flags: u32,
@@ -753,6 +732,7 @@ pub struct BcmMsgHead {
     /// number of can frames appended to the message head
     _nframes: u32,
     // TODO figure out how why C adds a padding here?
+    #[cfg(all(target_pointer_width = "32"))]
     _pad: u32,
     // TODO figure out how to allocate only nframes instead of MAX_NFRAMES
     /// buffer of CAN frames
@@ -764,23 +744,6 @@ pub struct BcmMsgHead {
 /// Head of messages to and from the broadcast manager see _pad fields for differences
 /// to BcmMsgHead
 #[repr(C)]
-#[cfg(all(target_pointer_width = "64"))]
-pub struct BcmMsgHeadFrameLess {
-    _opcode: u32,
-    _flags: u32,
-    /// number of frames to send before changing interval
-    _count: u32,
-    /// interval for the first count frames
-    _ival1: timeval,
-    /// interval for the following frames
-    _ival2: timeval,
-    _can_id: u32,
-    /// number of can frames appended to the message head
-    _nframes: u32,
-}
-
-#[repr(C)]
-#[cfg(all(target_pointer_width = "32"))]
 pub struct BcmMsgHeadFrameLess {
     _opcode: u32,
     _flags: u32,
@@ -796,6 +759,7 @@ pub struct BcmMsgHeadFrameLess {
     // Workaround Rust ZST has a size of 0 for frames, in
     // C the BcmMsgHead struct contains an Array that although it has
     // a length of zero still takes n (4) bytes.
+    #[cfg(all(target_pointer_width = "32"))]
     _pad: usize,
 }
 
