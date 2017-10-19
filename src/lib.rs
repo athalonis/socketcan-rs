@@ -59,9 +59,9 @@ mod util;
 #[cfg(test)]
 mod tests;
 
-use libc::{c_int, c_short, c_void, c_uint, c_ulong, EAGAIN, F_SETFL, O_NONBLOCK, fcntl, socket,
-           SOCK_RAW, close, bind, connect, sockaddr, read, write, SOL_SOCKET, SO_RCVTIMEO,
-           timespec, timeval, EINPROGRESS, SO_SNDTIMEO};
+use libc::{c_int, c_short, c_void, c_uint, c_ulong, F_SETFL, O_NONBLOCK, fcntl, socket, SOCK_RAW,
+           close, bind, connect, sockaddr, read, write, SOL_SOCKET, SO_RCVTIMEO, timespec,
+           timeval, EINPROGRESS, SO_SNDTIMEO};
 use itertools::Itertools;
 use mio::{Evented, Events, Ready, Poll, PollOpt, Token};
 use mio::unix::EventedFd;
@@ -1024,23 +1024,22 @@ impl Drop for CanBCMSocket {
 }
 
 
-pub struct BcmSocketListener {
-    //bcm_socket: CanBCMSocket,
+pub struct BcmListener {
     io: PollEvented<CanBCMSocket>,
 }
 
-impl BcmSocketListener {
-    pub fn from(bcm_socket: CanBCMSocket, handle: &Handle) -> io::Result<BcmSocketListener> {
+impl BcmListener {
+    pub fn from(bcm_socket: CanBCMSocket, handle: &Handle) -> io::Result<BcmListener> {
         //let evented_fd = EventedFd(&sock_fd);
         let io = try!(PollEvented::new(bcm_socket, handle));
-        Ok(BcmSocketListener {
+        Ok(BcmListener {
             //bcm_socket: bcm_socket,
             io: io,
         })
     }
 }
 
-impl futures::stream::Stream for BcmSocketListener {
+impl futures::stream::Stream for BcmListener {
     type Item = BcmMsgHead;
     type Error = io::Error;
     fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {

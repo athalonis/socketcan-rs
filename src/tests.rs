@@ -91,14 +91,11 @@ mod vcan_tests {
         let ival = time::Duration::from_millis(1);
         cbs.filter_id(0x123, ival, ival).unwrap();
 
-        let cl = BcmSocketListener::from(cbs);
-        let msg_stream = cl.and_then(|msg_head| {
-            print!("MSG HEAD {:?}", msg_head.can_id());
-            Ok(msg_head)
-        }).for_each(|msg_head| {
-                print!("MSG HEAD {:?}", msg_head.can_id());
-                Ok(())
-            });
+        let cl = BcmListener::from(cbs, &core.handle()).unwrap();
+        let msg_stream = cl.for_each(|msg_head| {
+            print!("MSG HEAD {:?}", msg_head.datacan_id());
+            Ok(())
+        });
         core.run(msg_stream).unwrap();
         println!("Done Done");
     }
