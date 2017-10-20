@@ -1030,12 +1030,8 @@ pub struct BcmListener {
 
 impl BcmListener {
     pub fn from(bcm_socket: CanBCMSocket, handle: &Handle) -> io::Result<BcmListener> {
-        //let evented_fd = EventedFd(&sock_fd);
         let io = try!(PollEvented::new(bcm_socket, handle));
-        Ok(BcmListener {
-            //bcm_socket: bcm_socket,
-            io: io,
-        })
+        Ok(BcmListener { io: io })
     }
 }
 
