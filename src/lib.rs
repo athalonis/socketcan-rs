@@ -67,7 +67,7 @@ mod util;
 mod tests;
 
 use libc::{c_int, c_short, c_void, c_uint, c_ulong, socket, SOCK_RAW, close, bind, connect,
-           sockaddr, read, write, SOL_SOCKET, SO_RCVTIMEO, timespec, timeval, EINPROGRESS,
+           sockaddr, setsockopt, read, write, SOL_SOCKET, SO_RCVTIMEO, timespec, timeval, EINPROGRESS,
            SO_SNDTIMEO, time_t, suseconds_t, fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
 use itertools::Itertools;
 use mio::{Evented, Ready, Poll, PollOpt, Token};
@@ -129,8 +129,10 @@ const AF_CAN: c_int = 29;
 const PF_CAN: c_int = 29;
 const CAN_RAW: c_int = 1;
 const CAN_BCM: c_int = 2;
+const CAN_ISOTP: c_int = 6; /* ISO 15765-2 Transport Protocol */
 const SOL_CAN_BASE: c_int = 100;
 const SOL_CAN_RAW: c_int = SOL_CAN_BASE + CAN_RAW;
+const SOL_CAN_ISOTP: c_int = SOL_CAN_BASE + CAN_ISOTP;
 const CAN_RAW_FILTER: c_int = 1;
 const CAN_RAW_ERR_FILTER: c_int = 2;
 const CAN_RAW_LOOPBACK: c_int = 3;
@@ -138,6 +140,9 @@ const CAN_RAW_RECV_OWN_MSGS: c_int = 4;
 // unused:
 // const CAN_RAW_FD_FRAMES: c_int = 5;
 const CAN_RAW_JOIN_FILTERS: c_int = 6;
+
+const CAN_ISOTP_OPTS: c_int = 1; /* pass struct can_isotp_options */
+const CAN_ISOTP_RECV_FC: c_int = 2; /* pass struct can_isotp_fc_options */
 
 /// datagram (conn.less) socket
 const SOCK_DGRAM: c_int = 2;
@@ -173,6 +178,18 @@ pub const ERR_MASK_ALL: u32 = ERR_MASK;
 /// an error mask that will cause SocketCAN to silently drop all errors
 pub const ERR_MASK_NONE: u32 = 0;
 
+const CAN_ISOTP_LISTEN_MODE:    c_int = 0x001; /* listen only (do not send FC) */
+const CAN_ISOTP_EXTEND_ADDR:    c_int = 0x002; /* enable extended addressing */
+const CAN_ISOTP_TX_PADDING:     c_int = 0x004; /* enable CAN frame padding tx path */
+const CAN_ISOTP_RX_PADDING:     c_int = 0x008; /* enable CAN frame padding rx path */
+const CAN_ISOTP_CHK_PAD_LEN:    c_int = 0x010; /* check received CAN frame padding */
+const CAN_ISOTP_CHK_PAD_DATA:   c_int = 0x020; /* check received CAN frame padding */
+const CAN_ISOTP_HALF_DUPLEX:    c_int = 0x040; /* half duplex error state handling */
+const CAN_ISOTP_FORCE_TXSTMIN:  c_int = 0x080; /* ignore stmin from received FC */
+const CAN_ISOTP_FORCE_RXSTMIN:  c_int = 0x100; /* ignore CFs depending on rx stmin */
+const CAN_ISOTP_RX_EXT_ADDR:    c_int = 0x200;/* different rx extended addressing */
+
+
 fn c_timeval_new(t: time::Duration) -> timeval {
     timeval {
         tv_sec: t.as_secs() as time_t,
@@ -188,6 +205,64 @@ struct CanAddr {
     rx_id: u32,
     tx_id: u32,
 }
+
+
+#[derive(Debug)]
+#[repr(C)]
+struct CanTpOptions {
+    flags : u32,        /* set flags for isotp behaviour.   */
+                        /* __u32 value : flags see below    */
+    frame_txtime :u32,  /* frame transmission time (N_As/N_Ar)  */
+                        /* __u32 value : time in nano secs  */
+
+    ext_address : u8,   /* set address for extended addressing  */
+                        /* __u8 value : extended address    */
+
+    txpad_content : u8, /* set content of padding byte (tx) */
+                        /* __u8 value : content on tx path  */
+
+    rxpad_content : u8, /* set content of padding byte (rx) */
+                        /* __u8 value : content on rx path  */
+
+    rx_ext_address : u8,    /* set address for extended addressing  */
+}
+
+#[repr(C)]
+struct CanTpFcOptions {
+
+    bs : u8,        /* blocksize provided in FC frame   */
+                    /* __u8 value : blocksize. 0 = off  */
+
+    stmin : u8,     /* separation time provided in FC frame */
+                    /* __u8 value :             */
+                    /* 0x00 - 0x7F : 0 - 127 ms     */
+                    /* 0x80 - 0xF0 : reserved       */
+                    /* 0xF1 - 0xF9 : 100 us - 900 us    */
+                    /* 0xFA - 0xFF : reserved       */
+
+    wftmax : u8,    /* max. number of wait frame transmiss. */
+                    /* __u8 value : 0 = omit FC N_PDU WT    */
+}
+
+#[repr(C)]
+struct CanIsotpLlOptions {
+
+    mtu : u8,       /* generated & accepted CAN frame type  */
+                    /* __u8 value :             */
+                    /* CAN_MTU   (16) -> standard CAN 2.0   */
+                    /* CANFD_MTU (72) -> CAN FD frame   */
+
+    tx_dl : u8,     /* tx link layer data length in bytes   */
+                    /* (configured maximum payload length)  */
+                    /* __u8 value : 8,12,16,20,24,32,48,64  */
+                    /* => rx path supports all LL_DL values */
+
+    tx_flags : u8,  /* set into struct canfd_frame.flags    */
+                    /* at frame creation: e.g. CANFD_BRS    */
+                    /* Obsolete when the BRS flag is fixed  */
+                    /* by the CAN netdriver configuration   */
+}
+
 
 #[derive(Debug)]
 /// Errors opening socket
@@ -817,6 +892,181 @@ impl BcmMsgHead {
         return unsafe { slice::from_raw_parts(self._frames.as_ptr(), self._nframes as usize) };
     }
 }
+
+/// A socket for a CAN device, specifically for broadcast manager operations.
+#[derive(Debug)]
+pub struct CanTpSocket {
+    pub fd: c_int,
+}
+impl CanTpSocket {
+    /// Open a named CAN device non blocking.
+    ///
+    /// Usually the more common case, opens a socket can device by name, such
+    /// as "vcan0" or "socan0".
+    pub fn open_nb(ifname: &str, send_id : c_int, recv_id : c_int) -> Result<CanTpSocket, CanSocketOpenError> {
+        let if_index = if_nametoindex(ifname)?;
+        CanTpSocket::open_if_nb(if_index, send_id, recv_id)
+    }
+
+    /// Open CAN device by interface number non blocking.
+    ///
+    /// Opens a CAN device by kernel interface number.
+    pub fn open_if_nb(if_index: c_uint, send_id : c_int, recv_id : c_int) -> Result<CanTpSocket, CanSocketOpenError> {
+
+        // open socket
+        let sock_fd;
+        unsafe {
+            sock_fd= socket(PF_CAN, SOCK_DGRAM, CAN_ISOTP)
+        }
+
+        if sock_fd == -1 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        let addr = CanAddr {
+            _af_can: AF_CAN as c_short,
+            if_index: if_index as c_int,
+            rx_id: recv_id as c_uint,
+            tx_id: send_id as c_uint,
+        };
+
+        let sockaddr_ptr = &addr as *const CanAddr;
+
+        let bind_res;
+        unsafe {
+            bind_res = bind(
+                sock_fd,
+                sockaddr_ptr as *const sockaddr,
+                size_of::<CanAddr>() as u32,
+            );
+        }
+
+        if bind_res != 0 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        let opts = CanTpOptions {
+            flags           : 0,
+            frame_txtime    : 5000 as c_uint, //set this by variable
+            ext_address     : 0,
+            txpad_content   : 0,
+            rxpad_content   : 0,
+            rx_ext_address  : 0,
+        };
+
+        let opts_ptr = &opts as *const CanTpOptions;
+
+        let opt_res;
+        unsafe {
+            opt_res = setsockopt(
+                sock_fd,
+                SOL_CAN_ISOTP,
+                CAN_ISOTP_OPTS,
+                opts_ptr as *const c_void,
+                size_of::<CanTpOptions>() as u32,
+            );
+        }
+
+        if opt_res != 0 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        // TODO: make this as parameters
+        let fcOpts = CanTpFcOptions {
+            bs      : 8 as u8,
+            stmin   : 14 as u8,
+            wftmax  : 0,
+        };
+
+        let fcOpts_ptr = &fcOpts as *const CanTpFcOptions;
+
+        let fcOpt_res;
+        unsafe {
+            fcOpt_res = setsockopt(
+                sock_fd,
+                SOL_CAN_ISOTP,
+                CAN_ISOTP_RECV_FC,
+                fcOpts_ptr as *const c_void,
+                size_of::<CanTpFcOptions>() as u32,
+            );
+        }
+
+        if fcOpt_res != 0 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        Ok(CanTpSocket { fd: sock_fd })
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        unsafe {
+            let rv = close(self.fd);
+            if rv != -1 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a single can frame.
+    pub fn read_msg(&self) -> Vec<u8> {
+
+        //let nbytes = read(self.fd, frame, len);
+
+        let mut msg : [u8; 4096] = [0; 4096];
+        let msg_ptr = &mut msg as *mut[u8; 4096];
+        let mut len = 0;
+        unsafe {
+            len = read(
+                self.fd.clone(),
+                msg_ptr as *mut c_void,
+                4096,
+            )
+        };
+
+        let mut msg_vec = Vec::new();
+        msg_vec.extend(msg[0..len as usize].iter().cloned());
+
+        msg_vec
+    }
+
+    /// Write a single can tp frame.
+    ///
+    /// Note that this function can fail with an `EAGAIN` error or similar.
+    /// Use `write_frame_insist` if you need to be sure that the message got
+    /// sent or failed.
+    pub fn write_frame(&self, msg : Vec<u8>) -> io::Result<()> {
+        // not a mutable reference needed (see std::net::UdpSocket) for
+        // a comparison
+        // debug!("Sending: {:?}", frame);
+
+        // TODO check length
+        //if msg.len() < 4096 {
+        //    return Err(std::io::Error("Message Length exceeds maximum of 4095 Bytes"));
+        //}
+
+        let write_rv = unsafe {
+
+            let mut msg_arr : [u8; 4096] = [0; 4096];
+            for i in 0..msg.len() { msg_arr[i] = msg[i] }
+            let msg_ptr = &msg_arr as *const [u8; 4096];
+
+            write(self.fd, msg_ptr as *const c_void, msg.len())
+        };
+
+        if write_rv as usize != msg.len() {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(())
+    }
+
+
+
+}
+
+
+
 
 /// A socket for a CAN device, specifically for broadcast manager operations.
 #[derive(Debug)]
