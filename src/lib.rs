@@ -895,181 +895,6 @@ impl BcmMsgHead {
 
 /// A socket for a CAN device, specifically for broadcast manager operations.
 #[derive(Debug)]
-pub struct CanTpSocket {
-    pub fd: c_int,
-}
-impl CanTpSocket {
-    /// Open a named CAN device non blocking.
-    ///
-    /// Usually the more common case, opens a socket can device by name, such
-    /// as "vcan0" or "socan0".
-    pub fn open_nb(ifname: &str, send_id : c_int, recv_id : c_int) -> Result<CanTpSocket, CanSocketOpenError> {
-        let if_index = if_nametoindex(ifname)?;
-        CanTpSocket::open_if_nb(if_index, send_id, recv_id)
-    }
-
-    /// Open CAN device by interface number non blocking.
-    ///
-    /// Opens a CAN device by kernel interface number.
-    pub fn open_if_nb(if_index: c_uint, send_id : c_int, recv_id : c_int) -> Result<CanTpSocket, CanSocketOpenError> {
-
-        // open socket
-        let sock_fd;
-        unsafe {
-            sock_fd= socket(PF_CAN, SOCK_DGRAM, CAN_ISOTP)
-        }
-
-        if sock_fd == -1 {
-            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
-        }
-
-        let addr = CanAddr {
-            _af_can: AF_CAN as c_short,
-            if_index: if_index as c_int,
-            rx_id: recv_id as c_uint,
-            tx_id: send_id as c_uint,
-        };
-
-        let sockaddr_ptr = &addr as *const CanAddr;
-
-        let bind_res;
-        unsafe {
-            bind_res = bind(
-                sock_fd,
-                sockaddr_ptr as *const sockaddr,
-                size_of::<CanAddr>() as u32,
-            );
-        }
-
-        if bind_res != 0 {
-            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
-        }
-
-        let opts = CanTpOptions {
-            flags           : 0,
-            frame_txtime    : 5000 as c_uint, //set this by variable
-            ext_address     : 0,
-            txpad_content   : 0,
-            rxpad_content   : 0,
-            rx_ext_address  : 0,
-        };
-
-        let opts_ptr = &opts as *const CanTpOptions;
-
-        let opt_res;
-        unsafe {
-            opt_res = setsockopt(
-                sock_fd,
-                SOL_CAN_ISOTP,
-                CAN_ISOTP_OPTS,
-                opts_ptr as *const c_void,
-                size_of::<CanTpOptions>() as u32,
-            );
-        }
-
-        if opt_res != 0 {
-            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
-        }
-
-        // TODO: make this as parameters
-        let fcOpts = CanTpFcOptions {
-            bs      : 8 as u8,
-            stmin   : 14 as u8,
-            wftmax  : 0,
-        };
-
-        let fcOpts_ptr = &fcOpts as *const CanTpFcOptions;
-
-        let fcOpt_res;
-        unsafe {
-            fcOpt_res = setsockopt(
-                sock_fd,
-                SOL_CAN_ISOTP,
-                CAN_ISOTP_RECV_FC,
-                fcOpts_ptr as *const c_void,
-                size_of::<CanTpFcOptions>() as u32,
-            );
-        }
-
-        if fcOpt_res != 0 {
-            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
-        }
-
-        Ok(CanTpSocket { fd: sock_fd })
-    }
-
-    fn close(&mut self) -> io::Result<()> {
-        unsafe {
-            let rv = close(self.fd);
-            if rv != -1 {
-                return Err(io::Error::last_os_error());
-            }
-        }
-        Ok(())
-    }
-
-    /// Read a single can frame.
-    pub fn read_msg(&self) -> Vec<u8> {
-
-        //let nbytes = read(self.fd, frame, len);
-
-        let mut msg : [u8; 4096] = [0; 4096];
-        let msg_ptr = &mut msg as *mut[u8; 4096];
-        let mut len = 0;
-        unsafe {
-            len = read(
-                self.fd.clone(),
-                msg_ptr as *mut c_void,
-                4096,
-            )
-        };
-
-        let mut msg_vec = Vec::new();
-        msg_vec.extend(msg[0..len as usize].iter().cloned());
-
-        msg_vec
-    }
-
-    /// Write a single can tp frame.
-    ///
-    /// Note that this function can fail with an `EAGAIN` error or similar.
-    /// Use `write_frame_insist` if you need to be sure that the message got
-    /// sent or failed.
-    pub fn write_frame(&self, msg : Vec<u8>) -> io::Result<()> {
-        // not a mutable reference needed (see std::net::UdpSocket) for
-        // a comparison
-        // debug!("Sending: {:?}", frame);
-
-        // TODO check length
-        //if msg.len() < 4096 {
-        //    return Err(std::io::Error("Message Length exceeds maximum of 4095 Bytes"));
-        //}
-
-        let write_rv = unsafe {
-
-            let mut msg_arr : [u8; 4096] = [0; 4096];
-            for i in 0..msg.len() { msg_arr[i] = msg[i] }
-            let msg_ptr = &msg_arr as *const [u8; 4096];
-
-            write(self.fd, msg_ptr as *const c_void, msg.len())
-        };
-
-        if write_rv as usize != msg.len() {
-            return Err(io::Error::last_os_error());
-        }
-
-        Ok(())
-    }
-
-
-
-}
-
-
-
-
-/// A socket for a CAN device, specifically for broadcast manager operations.
-#[derive(Debug)]
 pub struct CanBCMSocket {
     pub fd: c_int,
 }
@@ -1307,3 +1132,281 @@ impl futures::stream::Stream for BcmListener {
         }
     }
 }
+
+/// A socket for a CAN TP device, specifically for broadcast manager operations.
+#[derive(Debug)]
+pub struct CanTpSocket {
+    pub fd: c_int,
+}
+impl CanTpSocket {
+    /// Open a named CAN device non blocking.
+    ///
+    /// Usually the more common case, opens a socket can device by name, such
+    /// as "vcan0" or "socan0".
+    pub fn open_nb(ifname: &str, send_id : c_int, recv_id : c_int) -> Result<CanTpSocket, CanSocketOpenError> {
+        let if_index = if_nametoindex(ifname)?;
+        CanTpSocket::open_if_nb(if_index, send_id, recv_id)
+    }
+
+    /// Open CAN device by interface number non blocking.
+    ///
+    /// Opens a CAN device by kernel interface number.
+    pub fn open_if_nb(if_index: c_uint, send_id : c_int, recv_id : c_int) -> Result<CanTpSocket, CanSocketOpenError> {
+
+        // open socket
+        let sock_fd;
+        unsafe {
+            sock_fd= socket(PF_CAN, SOCK_DGRAM, CAN_ISOTP)
+        }
+
+        if sock_fd == -1 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        let addr = CanAddr {
+            _af_can: AF_CAN as c_short,
+            if_index: if_index as c_int,
+            rx_id: recv_id as c_uint,
+            tx_id: send_id as c_uint,
+        };
+
+        let sockaddr_ptr = &addr as *const CanAddr;
+
+        let bind_res;
+        unsafe {
+            bind_res = bind(
+                sock_fd,
+                sockaddr_ptr as *const sockaddr,
+                size_of::<CanAddr>() as u32,
+            );
+        }
+
+        if bind_res != 0 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        let opts = CanTpOptions {
+            flags           : 0,
+            frame_txtime    : 5000 as c_uint, //set this by variable
+            ext_address     : 0,
+            txpad_content   : 0,
+            rxpad_content   : 0,
+            rx_ext_address  : 0,
+        };
+
+        let opts_ptr = &opts as *const CanTpOptions;
+
+        let opt_res;
+        unsafe {
+            opt_res = setsockopt(
+                sock_fd,
+                SOL_CAN_ISOTP,
+                CAN_ISOTP_OPTS,
+                opts_ptr as *const c_void,
+                size_of::<CanTpOptions>() as u32,
+            );
+        }
+
+        if opt_res != 0 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        // TODO: make this as parameters
+        let fcOpts = CanTpFcOptions {
+            bs      : 8 as u8,
+            stmin   : 14 as u8,
+            wftmax  : 0,
+        };
+
+        let fcOpts_ptr = &fcOpts as *const CanTpFcOptions;
+
+        let fcOpt_res;
+        unsafe {
+            fcOpt_res = setsockopt(
+                sock_fd,
+                SOL_CAN_ISOTP,
+                CAN_ISOTP_RECV_FC,
+                fcOpts_ptr as *const c_void,
+                size_of::<CanTpFcOptions>() as u32,
+            );
+        }
+
+        if fcOpt_res != 0 {
+            return Err(CanSocketOpenError::from(io::Error::last_os_error()));
+        }
+
+        Ok(CanTpSocket { fd: sock_fd })
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        unsafe {
+            let rv = close(self.fd);
+            if rv != -1 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+
+    /// Change socket to non-blocking mode
+    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        // retrieve current flags
+        let oldfl = unsafe { fcntl(self.fd, F_GETFL) };
+
+        if oldfl == -1 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let newfl = if nonblocking {
+            oldfl | O_NONBLOCK
+        } else {
+            oldfl & !O_NONBLOCK
+        };
+
+        let rv = unsafe { fcntl(self.fd, F_SETFL, newfl) };
+
+        if rv != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Sets the read timeout on the socket
+    ///
+    /// For convenience, the result value can be checked using
+    /// `ShouldRetry::should_retry` when a timeout is set.
+    pub fn set_read_timeout(&self, duration: time::Duration) -> io::Result<()> {
+        set_socket_option(self.fd, SOL_SOCKET, SO_RCVTIMEO, &c_timeval_new(duration))
+    }
+
+    /// Sets the write timeout on the socket
+    pub fn set_write_timeout(&self, duration: time::Duration) -> io::Result<()> {
+        set_socket_option(self.fd, SOL_SOCKET, SO_SNDTIMEO, &c_timeval_new(duration))
+    }
+
+
+    /// Read a single can frame.
+    pub fn read_msg(&self) -> io::Result<Vec<u8>> {
+
+        //let nbytes = read(self.fd, frame, len);
+
+        let mut msg : [u8; 4096] = [0; 4096];
+        let msg_ptr = &mut msg as *mut[u8; 4096];
+        let mut len = 0;
+        unsafe {
+            len = read(
+                self.fd.clone(),
+                msg_ptr as *mut c_void,
+                4096,
+            )
+        };
+
+        println!("len: {:?}", len);
+
+        let last_error = io::Error::last_os_error();
+
+        if len < 0 { Err(last_error) }
+        else {
+            let mut msg_vec = Vec::new();
+            msg_vec.extend(msg[0..len as usize].iter().cloned());
+            Ok(msg_vec)
+        }
+
+    }
+
+    /// Write a single can tp frame.
+    ///
+    /// Note that this function can fail with an `EAGAIN` error or similar.
+    /// Use `write_frame_insist` if you need to be sure that the message got
+    /// sent or failed.
+    pub fn write_frame(&self, msg : Vec<u8>) -> io::Result<()> {
+        // not a mutable reference needed (see std::net::UdpSocket) for
+        // a comparison
+        // debug!("Sending: {:?}", frame);
+
+        // TODO check length
+        //if msg.len() < 4096 {
+        //    return Err(std::io::Error("Message Length exceeds maximum of 4095 Bytes"));
+        //}
+        let mut msg_arr : [u8; 4096] = [0; 4096];
+        for i in 0..msg.len() { msg_arr[i] = msg[i] }
+        let msg_ptr = &msg_arr as *const [u8; 4096];
+
+        let write_rv = unsafe {
+            write(self.fd, msg_ptr as *const c_void, msg.len())
+        };
+
+        if write_rv as usize != msg.len() {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(())
+    }
+
+}
+
+impl Evented for CanTpSocket {
+    fn register(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.fd).register(poll, token, interest, opts)
+    }
+
+    fn reregister(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        EventedFd(&self.fd).reregister(poll, token, interest, opts)
+    }
+
+    fn deregister(&self, poll: &Poll) -> io::Result<()> {
+        EventedFd(&self.fd).deregister(poll)
+    }
+}
+
+impl Drop for CanTpSocket {
+    fn drop(&mut self) {
+        self.close().ok(); // ignore result
+    }
+}
+
+pub struct TpListener {
+    io: PollEvented<CanTpSocket>,
+}
+
+impl TpListener {
+    pub fn from(tp_socket: CanTpSocket, handle: &Handle) -> io::Result<TpListener> {
+        let io = try!(PollEvented::new(tp_socket, handle));
+        Ok(TpListener { io: io })
+    }
+}
+
+impl futures::stream::Stream for TpListener {
+    type Item = Vec<u8>;
+    type Error = io::Error;
+    fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
+        if let futures::Async::NotReady = self.io.poll_read() {
+            return Ok(futures::Async::NotReady);
+        }
+
+        match self.io.get_ref().read_msg() {
+            Ok(n) => Ok(futures::Async::Ready(Some(n))),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    self.io.need_read();
+                    return Ok(futures::Async::NotReady);
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
+

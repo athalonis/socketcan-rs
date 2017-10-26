@@ -12,13 +12,13 @@ mod vcan_tp_tests {
 
     use futures::stream::Stream;
     use self::tokio_core::reactor::Core;
-    use {CanInterface, CanTpSocket, ERR_MASK_ALL,
+    use {TpListener, CanInterface, CanTpSocket, ERR_MASK_ALL,
          ERR_MASK_NONE};
     use std::time;
     use ShouldRetry;
 
     #[test]
-    fn vcan0_cantp_read(){
+    fn vcan0_cantp_loopback(){
 
         let len : usize = 1978;
 
@@ -29,7 +29,7 @@ mod vcan_tp_tests {
         for i in 0..len { test_msg.push((0xff & i) as u8) }
 
         tp2.write_frame(test_msg.clone());
-        let msg = tp.read_msg();
+        let msg = tp.read_msg().unwrap();
 
         let err = 0;
         for i in 0..len {
@@ -41,6 +41,42 @@ mod vcan_tp_tests {
         println!("size {:?}", msg.len());
         assert!(len as usize == msg.len());
     }
+
+    #[test]
+    fn vcan0_cantp_socket_nonblocking() {
+        let cs = CanTpSocket::open_nb("vcan0", 0x4de, 0x4c8).unwrap();
+        cs.set_nonblocking(true);
+
+        // no timeout set, but should return immediately
+        assert!(cs.read_msg().should_retry());
+    }
+
+    //#[test]
+    //fn vcan0_cantp_non_blocking() {
+    //    let mut core = Core::new().unwrap();
+    //    let cbs = CanTpSocket::open_nb("vcan0", 0x4de, 0x4c8).unwrap();
+    //    let ival = time::Duration::from_millis(1);
+
+
+    //    let cl = TpListener::from(cbs, &core.handle()).unwrap();
+    //    println!("Listener created");
+    //    let received = 0;
+    //    let msg_stream = cl.for_each(|msg| {
+    //        print!("MSG HEAD {:X} len: {:?}", msg[0], msg.len());
+    //        Ok(())
+    //    });
+
+    //    let tp2 = CanTpSocket::open_nb("vcan0", 0x4c8, 0x4de).unwrap();
+    //    let mut test_msg : Vec<u8> = Vec::new();
+    //    for i in 0..4095 { test_msg.push((0xff & i) as u8) }
+    //    tp2.write_frame(test_msg.clone());
+
+    //    core.run(msg_stream).unwrap();
+
+    //    println!("Done Done");
+    //}
+
+
 }
 
 
