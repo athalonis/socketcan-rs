@@ -1301,7 +1301,6 @@ impl CanTpSocket {
             )
         };
 
-        println!("len: {:?}", len);
 
         let last_error = io::Error::last_os_error();
 
