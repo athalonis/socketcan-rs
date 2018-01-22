@@ -180,8 +180,8 @@ pub const ERR_MASK_NONE: u32 = 0;
 
 const CAN_ISOTP_LISTEN_MODE:    c_int = 0x001; /* listen only (do not send FC) */
 const CAN_ISOTP_EXTEND_ADDR:    c_int = 0x002; /* enable extended addressing */
-const CAN_ISOTP_TX_PADDING:     c_int = 0x004; /* enable CAN frame padding tx path */
-const CAN_ISOTP_RX_PADDING:     c_int = 0x008; /* enable CAN frame padding rx path */
+const CAN_ISOTP_TX_PADDING:     u32 = 0x004; /* enable CAN frame padding tx path */
+const CAN_ISOTP_RX_PADDING:     u32 = 0x008; /* enable CAN frame padding rx path */
 const CAN_ISOTP_CHK_PAD_LEN:    c_int = 0x010; /* check received CAN frame padding */
 const CAN_ISOTP_CHK_PAD_DATA:   c_int = 0x020; /* check received CAN frame padding */
 const CAN_ISOTP_HALF_DUPLEX:    c_int = 0x040; /* half duplex error state handling */
@@ -1186,7 +1186,7 @@ impl CanTpSocket {
         }
 
         let opts = CanTpOptions {
-            flags           : 0,
+            flags           : CAN_ISOTP_TX_PADDING | CAN_ISOTP_RX_PADDING,
             frame_txtime    : 5000 as c_uint, //set this by variable
             ext_address     : 0,
             txpad_content   : 0,
